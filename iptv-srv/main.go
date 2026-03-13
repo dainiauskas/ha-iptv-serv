@@ -16,7 +16,7 @@ import (
 
 const (
 	port    = ":8080"
-	workers = 20 // Optimalus sinchroninių HTTP užklausų skaičius
+	workers = 20 // number of concurrent HTTP check workers
 )
 
 var (
@@ -44,14 +44,14 @@ func main() {
 	http.HandleFunc("/playlist.m3u", combinedPlaylistHandler)
 	http.HandleFunc("/playlist/", singlePlaylistHandler)
 
-	fmt.Printf("Vietinis IPTV tarpinis serveris paleistas. Klausoma prievado %s\n", port)
+	fmt.Printf("Local IPTV proxy server started. Listening on %s\n", port)
 	log.Fatal(http.ListenAndServe(port, nil))
 }
 
 func loadConfig() {
 	file, err := os.Open("/data/options.json")
 	if err != nil {
-		log.Println("Hass.io konfiguracijos failas nerastas, naudosime numatytuosius adresus")
+		log.Println("Hass.io config file not found, using default playlists")
 		setDefaultPlaylists()
 		return
 	}
@@ -59,7 +59,7 @@ func loadConfig() {
 
 	var opts Options
 	if err := json.NewDecoder(file).Decode(&opts); err != nil {
-		log.Println("Nepavyko nuskaityti Hass.io nustatymų:", err)
+		log.Println("Failed to read Hass.io options:", err)
 		setDefaultPlaylists()
 		return
 	}
@@ -149,26 +149,26 @@ func writeM3U(w http.ResponseWriter, channels []Channel) {
 
 // combinedPlaylistHandler serves one merged playlist from all configured sources
 func combinedPlaylistHandler(w http.ResponseWriter, r *http.Request) {
-	log.Println("Gauta užklausa – bendras grojaraštis. Pradedamas šaltinių parsiuntimas ir filtravimas...")
+	log.Println("Request: combined playlist – fetching and filtering sources...")
 
 	var channels []Channel
 	for _, sourceURL := range sourceM3Us {
 		ch, err := fetchChannelsFromURL(sourceURL)
 		if err != nil {
-			log.Printf("Nepavyko pasiekti šaltinio %s: %v", sourceURL, err)
+			log.Printf("Failed to fetch source %s: %v", sourceURL, err)
 			continue
 		}
 		channels = append(channels, ch...)
 	}
 
 	if len(channels) == 0 {
-		http.Error(w, "Nepavyko pasiekti jokių šaltinių", http.StatusBadGateway)
+		http.Error(w, "Failed to reach any sources", http.StatusBadGateway)
 		return
 	}
 
 	validChannels := validateChannelsConcurrently(channels)
 	writeM3U(w, validChannels)
-	log.Printf("Bendras grojaraštis: atiduota veikiančių kanalų %d iš %d", len(validChannels), len(channels))
+	log.Printf("Combined playlist: %d working channels out of %d", len(validChannels), len(channels))
 }
 
 // singlePlaylistHandler serves one playlist by name or index: /playlist/lit.m3u or /playlist/0.m3u
@@ -194,23 +194,23 @@ func singlePlaylistHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Gauta užklausa – atskiras grojaraštis %q. Šaltinis: %s", key, sourceURL)
+	log.Printf("Request: single playlist %q, source: %s", key, sourceURL)
 
 	channels, err := fetchChannelsFromURL(sourceURL)
 	if err != nil {
-		log.Printf("Nepavyko pasiekti šaltinio %s: %v", sourceURL, err)
-		http.Error(w, "Nepavyko pasiekti šaltinio", http.StatusBadGateway)
+		log.Printf("Failed to fetch source %s: %v", sourceURL, err)
+		http.Error(w, "Failed to reach source", http.StatusBadGateway)
 		return
 	}
 
 	if len(channels) == 0 {
-		http.Error(w, "Šaltinyje nėra kanalų", http.StatusBadGateway)
+		http.Error(w, "Source has no channels", http.StatusBadGateway)
 		return
 	}
 
 	validChannels := validateChannelsConcurrently(channels)
 	writeM3U(w, validChannels)
-	log.Printf("Atskiras grojaraštis %q: atiduota veikiančių kanalų %d iš %d", key, len(validChannels), len(channels))
+	log.Printf("Single playlist %q: %d working channels out of %d", key, len(validChannels), len(channels))
 }
 
 func validateChannelsConcurrently(channels []Channel) []Channel {
@@ -218,18 +218,18 @@ func validateChannelsConcurrently(channels []Channel) []Channel {
 	chInput := make(chan Channel, len(channels))
 	chOutput := make(chan Channel, len(channels))
 
-	// Konfigūruojamas HTTP klientas su griežtu Timeout
+	// HTTP client with strict timeout
 	client := &http.Client{
 		Timeout: 3 * time.Second,
 	}
 
-	// Paleidžiame darbininkus (Workers)
+	// Start workers
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for ch := range chInput {
-				// Atliekame HEAD užklausą – siunčiame tik antraštes, kad taupytume srautą
+				// HEAD request to check stream without downloading
 				req, err := http.NewRequest("HEAD", ch.URL, nil)
 				if err != nil {
 					continue
@@ -237,7 +237,7 @@ func validateChannelsConcurrently(channels []Channel) []Channel {
 				
 				resp, err := client.Do(req)
 				if err == nil && resp.StatusCode == http.StatusOK {
-					chOutput <- ch // Srautas veikia
+					chOutput <- ch // stream is reachable
 				}
 				if resp != nil {
 					resp.Body.Close()
@@ -246,17 +246,17 @@ func validateChannelsConcurrently(channels []Channel) []Channel {
 		}()
 	}
 
-	// Paskirstome užduotis
+	// Send tasks to workers
 	for _, ch := range channels {
 		chInput <- ch
 	}
 	close(chInput)
 
-	// Laukiame, kol visi darbininkai baigs darbą
+	// Wait for all workers to finish
 	wg.Wait()
 	close(chOutput)
 
-	// Surenkame rezultatus
+	// Collect results
 	var valid []Channel
 	for ch := range chOutput {
 		valid = append(valid, ch)

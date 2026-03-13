@@ -1,29 +1,29 @@
-# Vietinis IPTV tarpinis serveris (Hass.io Add-on)
+# Local IPTV proxy server (Hass.io Add-on)
 
-Šis įskiepis parsisiunčia nurodytus `.m3u` grojaraščius (pvz., iš `iptv-org`), patikrina ar kanalai veikia, ir teikia **bendrą** sujungtą grojaraštį bei **atskirus** grojaraščius kiekvienam šaltiniui – juos galite naudoti savo įrenginiuose (pvz., Apple TV).
+This add-on fetches the configured `.m3u` playlists (e.g. from `iptv-org`), checks that channels are reachable, and serves a **combined** playlist plus **per-source** playlists for use on your devices (e.g. Apple TV).
 
-## Diegimas iš GitHub
+## Installation from GitHub
 
-1. **Pridėkite repozitoriją** į Home Assistant: **Settings** → **Add-ons** → **Add-on store** → viršuje dešinėje **⋮** → **Repositories**.
-2. Įrašykite repozitorijos URL, pvz. `https://github.com/JŪSŲ_VARTOTOJAS/iptv-srv`.
-3. Paspauskite **Check for updates**. Skiltyje **Add-on store** turėtų pasirodyti **IPTV Server add-on repository** ir įskiepis **IPTV Server**.
-4. Atidarykite **IPTV Server** → **Install** (įdiegti). Pirmas diegimas gali užtrukti kelias minutes.
+1. **Add the repository** in Home Assistant: **Settings** → **Add-ons** → **Add-on store** → top-right **⋮** → **Repositories**.
+2. Enter the repository URL, e.g. `https://github.com/YOUR_USERNAME/iptv-srv`.
+3. Tap **Check for updates**. In **Add-on store** you should see **IPTV Server add-on repository** and the **IPTV Server** add-on.
+4. Open **IPTV Server** → **Install**. First install may take a few minutes.
 
-**Forkinant repozitoriją:** faile `repository.yaml` pakeiskite `USERNAME` į savo GitHub vartotojo vardą ir `maintainer` į savo kontaktus.
+**When forking:** In `repository.yaml` replace `USERNAME` with your GitHub username and `maintainer` with your contact details.
 
-## Nustatymai ir paleidimas
+## Configuration and startup
 
-1. Įdiegus eikite į **Configuration** (Konfigūracija). **Playlists** – kiekvienam grojaraščiui nurodykite **name** (pavadinimą) ir **url**. Pavadinimas naudojamas adrese: `/playlist/[pavadinimas].m3u`. Numatyta: `lit`, `rus` (iptv-org kanalai).
-2. Išsaugokite (**Save**). Rekomenduojama: **Start on boot**, **Watchdog**.
-3. Paspauskite **START** (Paleisti).
+1. After install go to **Configuration**. Under **Playlists** set **name** and **url** for each playlist. The name is used in the URL: `/playlist/[name].m3u`. Defaults: `lit`, `rus` (iptv-org).
+2. **Save**. Recommended: **Start on boot**, **Watchdog**.
+3. Tap **START**.
 
-## Naudojimas
+## Usage
 
-IPTV grojaraštį nurodykite savo programoje (Apple TV, VLC ir kt.):
+Use these URLs in your IPTV app (Apple TV, VLC, etc.):
 
-- **Bendras grojaraštis** (visi šaltiniai):  
-  `http://<JŪSŲ_HA_IP>:8080/playlist.m3u`
-- **Atskiri grojaraščiai** (pagal pavadinimą):  
-  `http://<JŪSŲ_HA_IP>:8080/playlist/lit.m3u`, `.../playlist/rus.m3u` ir t. t. Taip pat veikia pagal indeksą: `.../playlist/0.m3u`, `.../playlist/1.m3u`.
+- **Combined playlist** (all sources):  
+  `http://<YOUR_HA_IP>:8080/playlist.m3u`
+- **Per-playlist** (by name):  
+  `http://<YOUR_HA_IP>:8080/playlist/lit.m3u`, `.../playlist/rus.m3u`, etc. Index also works: `.../playlist/0.m3u`, `.../playlist/1.m3u`.
 
-Pvz.: `http://192.168.1.100:8080/playlist.m3u`
+Example: `http://192.168.1.100:8080/playlist.m3u`

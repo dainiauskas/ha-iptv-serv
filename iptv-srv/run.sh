@@ -1,7 +1,7 @@
 #!/usr/bin/env bashio
 
-# Pranešame sistemos žurnale apie paleidimą
+# Log startup
 bashio::log.info "Starting IPTV proxy server..."
 
-# Paleidžiame mūsų sukompiliuotą programą
+# Run the compiled binary
 exec /usr/bin/iptv-srv

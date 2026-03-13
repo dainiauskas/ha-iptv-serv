@@ -1,6 +1,6 @@
 name: "IPTV Server"
-description: "Vietinis IPTV tarpinis serveris srautų patikrinimui"
-version: "1.1.0"
+description: "Local IPTV proxy that validates streams and serves combined or per-playlist M3U"
+version: "1.1.1"
 slug: "iptv_srv"
 init: false
 arch:

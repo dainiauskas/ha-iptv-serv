@@ -1,6 +1,6 @@
 # Home Assistant add-on repository
 # https://developers.home-assistant.io/docs/add-ons/repository
-# Pakeiskite USERNAME į savo GitHub vartotoją ir maintainer į savo kontaktus
+# Replace USERNAME with your GitHub username and maintainer with your contact info
 name: IPTV Server add-on repository
 url: "https://github.com/USERNAME/iptv-srv"
 maintainer: "Your Name <your@email.com>"
