@@ -49,9 +49,15 @@ type Options struct {
 
 func main() {
 	loadConfig()
+	// Preload Xtream cache in background so first player_api request is fast
+	go func() {
+		getXtreamChannels()
+	}()
+
 	http.HandleFunc("/playlist.m3u", combinedPlaylistHandler)
 	http.HandleFunc("/playlist/", singlePlaylistHandler)
 	http.HandleFunc("/player_api.php", xtreamPlayerAPIHandler)
+	http.HandleFunc("/xmltv.php", xtreamXMLTVHandler)
 	http.HandleFunc("/get.php", xtreamGetStreamHandler)
 	http.HandleFunc("/live/", xtreamLiveStreamHandler)
 
@@ -284,12 +290,6 @@ func getXtreamChannels() []Channel {
 
 // xtreamPlayerAPIHandler serves Xtream Codes player_api.php (no auth, local use)
 func xtreamPlayerAPIHandler(w http.ResponseWriter, r *http.Request) {
-	channels := getXtreamChannels()
-	if channels == nil {
-		http.Error(w, "No channels available", http.StatusServiceUnavailable)
-		return
-	}
-
 	username := r.URL.Query().Get("username")
 	password := r.URL.Query().Get("password")
 	if username == "" {
@@ -305,6 +305,35 @@ func xtreamPlayerAPIHandler(w http.ResponseWriter, r *http.Request) {
 		host = "https://" + host
 	} else {
 		host = "http://" + host
+	}
+
+	// No action: return user_info + server_info immediately (no channel fetch = fast)
+	if action == "" {
+		userInfo := map[string]interface{}{
+			"username": username, "password": password,
+			"message": "", "auth": 1, "status": "Active",
+			"exp_date": nil, "is_trial": "0", "active_cons": 0,
+			"created_at": "", "max_connections": 0,
+			"allowed_output_formats": []string{"ts", "m3u8"},
+		}
+		serverInfo := map[string]interface{}{
+			"url": host, "port": "8080", "server_protocol": "http",
+			"timezone": "UTC", "timestamp_now": time.Now().Unix(),
+			"time_now": time.Now().Format("2006-01-02 15:04:05"),
+			"rtmp_port": "", "https_port": "",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"user_info": userInfo, "server_info": serverInfo,
+		})
+		return
+	}
+
+	// Actions that need channel list (use cache; may be slow on first request if preload not done)
+	channels := getXtreamChannels()
+	if channels == nil {
+		http.Error(w, "No channels available", http.StatusServiceUnavailable)
+		return
 	}
 
 	switch action {
@@ -336,31 +365,30 @@ func xtreamPlayerAPIHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(out)
 		return
-	case "":
-		// no action: return user_info + server_info (auth success)
-		userInfo := map[string]interface{}{
-			"username": username, "password": password,
-			"message": "", "auth": 1, "status": "Active",
-			"exp_date": nil, "is_trial": "0", "active_cons": 0,
-			"created_at": "", "max_connections": "0",
-			"allowed_output_formats": []string{"ts", "m3u8"},
-		}
-		serverInfo := map[string]interface{}{
-			"url": host, "port": "8080", "server_protocol": "http",
-			"timezone": "UTC", "timestamp_now": time.Now().Unix(),
-			"time_now": time.Now().Format("2006-01-02 15:04:05"),
-			"rtmp_port": "", "https_port": "",
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"user_info": userInfo, "server_info": serverInfo,
-		})
-		return
 	default:
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{})
 		return
 	}
+}
+
+// xtreamXMLTVHandler serves xmltv.php with minimal XMLTV EPG (channel list only, no programme data)
+func xtreamXMLTVHandler(w http.ResponseWriter, r *http.Request) {
+	channels := getXtreamChannels()
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>` + "\n<tv>\n"))
+	if channels != nil {
+		for i, ch := range channels {
+			name := parseChannelNameFromMetadata(ch.Metadata)
+			// Escape XML specials in display name
+			name = strings.ReplaceAll(name, "&", "&amp;")
+			name = strings.ReplaceAll(name, "<", "&lt;")
+			name = strings.ReplaceAll(name, ">", "&gt;")
+			id := strconv.Itoa(i + 1)
+			w.Write([]byte("  <channel id=\"" + id + "\">\n    <display-name>" + name + "</display-name>\n  </channel>\n"))
+		}
+	}
+	w.Write([]byte("</tv>\n"))
 }
 
 // xtreamGetStreamHandler redirects get.php?stream_id=N to the channel stream URL
