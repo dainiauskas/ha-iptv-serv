@@ -1,6 +1,6 @@
 name: "IPTV Server"
 description: "Local IPTV proxy that validates streams and serves combined or per-playlist M3U"
-version: "1.2.5"
+version: "1.2.6"
 slug: "iptv_srv"
 init: false
 arch:
@@ -22,8 +22,10 @@ options:
     - name: "rus"
       url: "https://iptv-org.github.io/iptv/languages/rus.m3u"
   epg_url: ""
+  validate_streams: false
 schema:
   playlists:
     - name: str
       url: str
   epg_url: str?
+  validate_streams: bool?

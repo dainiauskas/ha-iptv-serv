@@ -15,7 +15,8 @@ This add-on fetches the configured `.m3u` playlists (e.g. from `iptv-org`), chec
 
 1. After install go to **Configuration**.
    - **Playlists**: set **name** and **url** for each playlist. The name is used in the URL: `/playlist/[name].m3u`. Defaults: `lit`, `rus` (iptv-org).
-   - **EPG URL** (optional): full URL to an **XMLTV** file. Programmes are matched to channels by **tvg-id** (from the M3U `#EXTINF` line). Leave empty for no EPG. Example: `https://example.com/epg.xml`. Cached for 6 hours.
+   - **EPG URL** (optional): full URL to an **XMLTV** file. Programmes are matched to channels by **tvg-id** (from the M3U `#EXTINF` line). Leave empty for no EPG. Cached for 6 hours.
+   - **Validate streams** (optional, default off): if on, each channel is checked with a short HTTP request before being listed. Uses more CPU and can make the first load slow; turn off for lower CPU and faster Xtream/M3U response.
 2. **Save**. Recommended: **Start on boot**, **Watchdog**.
 3. Tap **START**.
 

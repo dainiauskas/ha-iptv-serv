@@ -23,9 +23,10 @@ const (
 )
 
 var (
-	sourceM3Us   []string            // for combined playlist
-	playlistMap  map[string]string   // slug or "0","1"... -> URL for single playlist lookup
-	epgURL       string              // optional EPG XMLTV URL from config
+	sourceM3Us      []string            // for combined playlist
+	playlistMap     map[string]string   // slug or "0","1"... -> URL for single playlist lookup
+	epgURL          string              // optional EPG XMLTV URL from config
+	validateStreams bool                // if true, check each stream with GET; if false, skip (faster, less CPU)
 )
 
 // EPG cache for xmltv.php
@@ -56,8 +57,9 @@ type PlaylistEntry struct {
 }
 
 type Options struct {
-	Playlists []PlaylistEntry `json:"playlists"`
-	EpgURL    string          `json:"epg_url"`
+	Playlists       []PlaylistEntry `json:"playlists"`
+	EpgURL          string          `json:"epg_url"`
+	ValidateStreams bool            `json:"validate_streams"`
 }
 
 type epgProgramme struct {
@@ -134,6 +136,7 @@ func loadConfig() {
 		}
 	}
 	epgURL = strings.TrimSpace(opts.EpgURL)
+	validateStreams = opts.ValidateStreams
 }
 
 func setDefaultPlaylists() {
@@ -263,9 +266,11 @@ func singlePlaylistHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	validChannels := validateChannelsConcurrently(channels)
-	writeM3U(w, validChannels)
-	log.Printf("Single playlist %q: %d working channels out of %d", key, len(validChannels), len(channels))
+	if validateStreams {
+		channels = validateChannelsConcurrently(channels)
+	}
+	writeM3U(w, channels)
+	log.Printf("Single playlist %q: %d channels", key, len(channels))
 }
 
 var tvgIDRe = regexp.MustCompile(`tvg-id="([^"]*)"`)
@@ -380,10 +385,16 @@ func getXtreamChannels() []Channel {
 	if len(channels) == 0 {
 		return nil
 	}
-	valid := validateChannelsConcurrently(channels)
-	xtreamCache = valid
+	var result []Channel
+	if validateStreams {
+		result = validateChannelsConcurrently(channels)
+		log.Printf("Xtream cache: built list of %d channels (validated)", len(result))
+	} else {
+		result = channels
+		log.Printf("Xtream cache: built list of %d channels (no validation)", len(result))
+	}
+	xtreamCache = result
 	xtreamCacheTime = time.Now()
-	log.Printf("Xtream cache: built list of %d channels", len(valid))
 	return xtreamCache
 }
 
