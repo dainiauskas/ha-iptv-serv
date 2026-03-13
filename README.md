@@ -9,8 +9,6 @@
 3. Paspauskite **Check for updates**. Skiltyje **Add-on store** turėtų pasirodyti **IPTV Server add-on repository** ir įskiepis **IPTV Server**.
 4. Atidarykite **IPTV Server** → **Install** (įdiegti). Pirmas diegimas gali užtrukti kelias minutes.
 
-**Pastaba:** naudokite **viešą** repozitoriją – Home Assistant negali tiesiogiai pasiekti private GitHub repo.
-
 **Forkinant repozitoriją:** faile `repository.yaml` pakeiskite `USERNAME` į savo GitHub vartotojo vardą ir `maintainer` į savo kontaktus.
 
 ## Nustatymai ir paleidimas
