@@ -23,5 +23,5 @@ options:
       url: "https://iptv-org.github.io/iptv/languages/rus.m3u"
 schema:
   playlists:
-    - name
-    - url
+    - name: str
+      url: str
