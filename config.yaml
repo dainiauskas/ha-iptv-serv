@@ -1,6 +1,6 @@
 name: "IPTV Server"
 description: "Vietinis IPTV tarpinis serveris srautų patikrinimui"
-version: "1.0.0"
+version: "1.1.0"
 slug: "iptv_srv"
 init: false
 arch:
@@ -17,8 +17,11 @@ map:
   - config:rw
 options:
   playlists:
-    - "https://iptv-org.github.io/iptv/languages/lit.m3u"
-    - "https://iptv-org.github.io/iptv/languages/rus.m3u"
+    - name: "lit"
+      url: "https://iptv-org.github.io/iptv/languages/lit.m3u"
+    - name: "rus"
+      url: "https://iptv-org.github.io/iptv/languages/rus.m3u"
 schema:
   playlists:
+    - name
     - url
