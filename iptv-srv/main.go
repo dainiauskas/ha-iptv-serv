@@ -149,6 +149,13 @@ func writeM3U(w http.ResponseWriter, channels []Channel) {
 
 // combinedPlaylistHandler serves one merged playlist from all configured sources
 func combinedPlaylistHandler(w http.ResponseWriter, r *http.Request) {
+	// HEAD: quick 200 so apps (e.g. IPTVX) can verify the URL without waiting for full generation
+	if r.Method == http.MethodHead {
+		w.Header().Set("Content-Type", "audio/x-mpegurl")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	log.Println("Request: combined playlist – fetching and filtering sources...")
 
 	var channels []Channel
@@ -191,6 +198,13 @@ func singlePlaylistHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		http.NotFound(w, r)
+		return
+	}
+
+	// HEAD: quick 200 so apps (e.g. IPTVX) can verify the URL
+	if r.Method == http.MethodHead {
+		w.Header().Set("Content-Type", "audio/x-mpegurl")
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
