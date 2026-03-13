@@ -2,55 +2,93 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	sourceM3U = "https://iptv-org.github.io/iptv/languages/rus.m3u"
-	port      = ":8080"
-	workers   = 20 // Optimalus sinchroninių HTTP užklausų skaičius
+	port    = ":8080"
+	workers = 20 // Optimalus sinchroninių HTTP užklausų skaičius
 )
+
+var sourceM3Us = []string{
+	"https://iptv-org.github.io/iptv/languages/lit.m3u",
+	"https://iptv-org.github.io/iptv/languages/rus.m3u",
+}
 
 type Channel struct {
 	Metadata string
 	URL      string
 }
 
-func main() {
-	http.HandleFunc("/playlist.m3u", playlistHandler)
+type Options struct {
+	Playlists []string `json:"playlists"`
+}
 
+func main() {
+	loadConfig()
+	http.HandleFunc("/playlist.m3u", playlistHandler)
+	
 	fmt.Printf("Vietinis IPTV tarpinis serveris paleistas. Klausoma prievado %s\n", port)
 	log.Fatal(http.ListenAndServe(port, nil))
 }
 
-func playlistHandler(w http.ResponseWriter, r *http.Request) {
-	log.Println("Gauta užklausa iš Apple TV. Pradedamas šaltinio parsiuntimas ir filtravimas...")
-
-	resp, err := http.Get(sourceM3U)
+func loadConfig() {
+	file, err := os.Open("/data/options.json")
 	if err != nil {
-		http.Error(w, "Nepavyko pasiekti šaltinio", http.StatusBadGateway)
+		log.Println("Hass.io konfiguracijos failas nerastas, naudosime numatytuosius adresus")
 		return
 	}
-	defer resp.Body.Close()
+	defer file.Close()
+
+	var opts Options
+	if err := json.NewDecoder(file).Decode(&opts); err != nil {
+		log.Println("Nepavyko nuskaityti Hass.io nustatymų:", err)
+		return
+	}
+
+	if len(opts.Playlists) > 0 {
+		sourceM3Us = opts.Playlists
+	}
+}
+
+func playlistHandler(w http.ResponseWriter, r *http.Request) {
+	log.Println("Gauta užklausa iš Apple TV. Pradedamas šaltinių parsiuntimas ir filtravimas...")
 
 	var channels []Channel
-	scanner := bufio.NewScanner(resp.Body)
-	var currentMeta string
 
-	// 1. Parsuojame M3U failą srautiniu būdu
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if strings.HasPrefix(line, "#EXTINF") {
-			currentMeta = line
-		} else if strings.HasPrefix(line, "http") && currentMeta != "" {
-			channels = append(channels, Channel{Metadata: currentMeta, URL: line})
-			currentMeta = "" // Atstatome sekančiam kanalui
+	for _, sourceURL := range sourceM3Us {
+		resp, err := http.Get(sourceURL)
+		if err != nil {
+			log.Printf("Nepavyko pasiekti šaltinio %s: %v", sourceURL, err)
+			continue
 		}
+
+		scanner := bufio.NewScanner(resp.Body)
+		var currentMeta string
+
+		// 1. Parsuojame M3U failą srautiniu būdu
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if strings.HasPrefix(line, "#EXTINF") {
+				currentMeta = line
+			} else if strings.HasPrefix(line, "http") && currentMeta != "" {
+				channels = append(channels, Channel{Metadata: currentMeta, URL: line})
+				currentMeta = "" // Atstatome sekančiam kanalui
+			}
+		}
+		resp.Body.Close()
+	}
+
+	if len(channels) == 0 {
+		http.Error(w, "Nepavyko pasiekti jokių šaltinių", http.StatusBadGateway)
+		return
 	}
 
 	// 2. Filtruojame kanalus naudojant darbininkų telkinį (Worker Pool)
@@ -62,7 +100,7 @@ func playlistHandler(w http.ResponseWriter, r *http.Request) {
 	for _, ch := range validChannels {
 		w.Write([]byte(ch.Metadata + "\n" + ch.URL + "\n"))
 	}
-
+	
 	log.Printf("Apdorojimas baigtas. Atiduota veikiančių kanalų: %d iš %d", len(validChannels), len(channels))
 }
 
@@ -87,7 +125,7 @@ func validateChannelsConcurrently(channels []Channel) []Channel {
 				if err != nil {
 					continue
 				}
-
+				
 				resp, err := client.Do(req)
 				if err == nil && resp.StatusCode == http.StatusOK {
 					chOutput <- ch // Srautas veikia
@@ -114,6 +152,6 @@ func validateChannelsConcurrently(channels []Channel) []Channel {
 	for ch := range chOutput {
 		valid = append(valid, ch)
 	}
-
+	
 	return valid
 }

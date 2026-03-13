@@ -1,0 +1,24 @@
+name: "IPTV Server"
+description: "Vietinis IPTV tarpinis serveris srautų patikrinimui"
+version: "1.0.0"
+slug: "iptv_srv"
+init: false
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+  - i386
+startup: "services"
+boot: "auto"
+ports:
+  8080/tcp: 8080
+map:
+  - config:rw
+options:
+  playlists:
+    - "https://iptv-org.github.io/iptv/languages/lit.m3u"
+    - "https://iptv-org.github.io/iptv/languages/rus.m3u"
+schema:
+  playlists:
+    - url
