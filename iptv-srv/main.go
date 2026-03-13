@@ -24,6 +24,14 @@ var (
 	playlistMap  map[string]string   // slug or "0","1"... -> URL for single playlist lookup
 )
 
+// Xtream cache: combined validated channel list for player_api and stream redirects
+var (
+	xtreamCache     []Channel
+	xtreamCacheTime time.Time
+	xtreamCacheMu   sync.RWMutex
+	xtreamCacheTTL  = 5 * time.Minute
+)
+
 type Channel struct {
 	Metadata string
 	URL      string
@@ -43,6 +51,9 @@ func main() {
 	loadConfig()
 	http.HandleFunc("/playlist.m3u", combinedPlaylistHandler)
 	http.HandleFunc("/playlist/", singlePlaylistHandler)
+	http.HandleFunc("/player_api.php", xtreamPlayerAPIHandler)
+	http.HandleFunc("/get.php", xtreamGetStreamHandler)
+	http.HandleFunc("/live/", xtreamLiveStreamHandler)
 
 	fmt.Printf("Local IPTV proxy server started. Listening on %s\n", port)
 	log.Fatal(http.ListenAndServe(port, nil))
@@ -225,6 +236,175 @@ func singlePlaylistHandler(w http.ResponseWriter, r *http.Request) {
 	validChannels := validateChannelsConcurrently(channels)
 	writeM3U(w, validChannels)
 	log.Printf("Single playlist %q: %d working channels out of %d", key, len(validChannels), len(channels))
+}
+
+// parseChannelNameFromMetadata extracts display name from #EXTINF:-1 tvg-id="..." , Name
+func parseChannelNameFromMetadata(meta string) string {
+	if idx := strings.LastIndex(meta, ","); idx >= 0 && idx+1 < len(meta) {
+		return strings.TrimSpace(meta[idx+1:])
+	}
+	return "Channel"
+}
+
+// getXtreamChannels returns cached combined channel list; rebuilds if expired
+func getXtreamChannels() []Channel {
+	xtreamCacheMu.RLock()
+	if time.Since(xtreamCacheTime) < xtreamCacheTTL && len(xtreamCache) > 0 {
+		ch := xtreamCache
+		xtreamCacheMu.RUnlock()
+		return ch
+	}
+	xtreamCacheMu.RUnlock()
+
+	xtreamCacheMu.Lock()
+	defer xtreamCacheMu.Unlock()
+	// double-check after acquiring write lock
+	if time.Since(xtreamCacheTime) < xtreamCacheTTL && len(xtreamCache) > 0 {
+		return xtreamCache
+	}
+
+	var channels []Channel
+	for _, sourceURL := range sourceM3Us {
+		ch, err := fetchChannelsFromURL(sourceURL)
+		if err != nil {
+			log.Printf("Xtream cache: failed to fetch %s: %v", sourceURL, err)
+			continue
+		}
+		channels = append(channels, ch...)
+	}
+	if len(channels) == 0 {
+		return nil
+	}
+	valid := validateChannelsConcurrently(channels)
+	xtreamCache = valid
+	xtreamCacheTime = time.Now()
+	log.Printf("Xtream cache: built list of %d channels", len(valid))
+	return xtreamCache
+}
+
+// xtreamPlayerAPIHandler serves Xtream Codes player_api.php (no auth, local use)
+func xtreamPlayerAPIHandler(w http.ResponseWriter, r *http.Request) {
+	channels := getXtreamChannels()
+	if channels == nil {
+		http.Error(w, "No channels available", http.StatusServiceUnavailable)
+		return
+	}
+
+	username := r.URL.Query().Get("username")
+	password := r.URL.Query().Get("password")
+	if username == "" {
+		username = "local"
+	}
+	if password == "" {
+		password = "local"
+	}
+
+	action := r.URL.Query().Get("action")
+	host := r.Host
+	if r.TLS != nil {
+		host = "https://" + host
+	} else {
+		host = "http://" + host
+	}
+
+	switch action {
+	case "get_live_categories":
+		out := []map[string]interface{}{
+			{"category_id": "1", "category_name": "Live", "parent_id": 0},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(out)
+		return
+	case "get_live_streams":
+		out := make([]map[string]interface{}, 0, len(channels))
+		for i, ch := range channels {
+			name := parseChannelNameFromMetadata(ch.Metadata)
+			out = append(out, map[string]interface{}{
+				"num":                i + 1,
+				"name":               name,
+				"stream_type":        "live",
+				"stream_id":          i + 1,
+				"stream_icon":       "",
+				"epg_channel_id":     "",
+				"added":              "",
+				"category_id":        "1",
+				"tv_archive":         0,
+				"direct_source":      "",
+				"tv_archive_duration": 0,
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(out)
+		return
+	case "":
+		// no action: return user_info + server_info (auth success)
+		userInfo := map[string]interface{}{
+			"username": username, "password": password,
+			"message": "", "auth": 1, "status": "Active",
+			"exp_date": nil, "is_trial": "0", "active_cons": 0,
+			"created_at": "", "max_connections": "0",
+			"allowed_output_formats": []string{"ts", "m3u8"},
+		}
+		serverInfo := map[string]interface{}{
+			"url": host, "port": "8080", "server_protocol": "http",
+			"timezone": "UTC", "timestamp_now": time.Now().Unix(),
+			"time_now": time.Now().Format("2006-01-02 15:04:05"),
+			"rtmp_port": "", "https_port": "",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"user_info": userInfo, "server_info": serverInfo,
+		})
+		return
+	default:
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{})
+		return
+	}
+}
+
+// xtreamGetStreamHandler redirects get.php?stream_id=N to the channel stream URL
+func xtreamGetStreamHandler(w http.ResponseWriter, r *http.Request) {
+	streamIDStr := r.URL.Query().Get("stream_id")
+	if streamIDStr == "" {
+		http.NotFound(w, r)
+		return
+	}
+	streamID, err := strconv.Atoi(streamIDStr)
+	if err != nil || streamID < 1 {
+		http.NotFound(w, r)
+		return
+	}
+	channels := getXtreamChannels()
+	if channels == nil || streamID > len(channels) {
+		http.NotFound(w, r)
+		return
+	}
+	url := channels[streamID-1].URL
+	http.Redirect(w, r, url, http.StatusFound)
+}
+
+// xtreamLiveStreamHandler redirects /live/username/password/stream_id to the channel stream URL
+func xtreamLiveStreamHandler(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/live/")
+	parts := strings.Split(path, "/")
+	if len(parts) < 3 {
+		http.NotFound(w, r)
+		return
+	}
+	streamIDStr := parts[len(parts)-1]
+	streamID, err := strconv.Atoi(streamIDStr)
+	if err != nil || streamID < 1 {
+		http.NotFound(w, r)
+		return
+	}
+	channels := getXtreamChannels()
+	if channels == nil || streamID > len(channels) {
+		http.NotFound(w, r)
+		return
+	}
+	url := channels[streamID-1].URL
+	http.Redirect(w, r, url, http.StatusFound)
 }
 
 func validateChannelsConcurrently(channels []Channel) []Channel {

@@ -19,6 +19,8 @@ This add-on fetches the configured `.m3u` playlists (e.g. from `iptv-org`), chec
 
 ## Usage
 
+### M3U playlists
+
 Use these URLs in your IPTV app (Apple TV, VLC, etc.):
 
 - **Combined playlist** (all sources):  
@@ -27,3 +29,13 @@ Use these URLs in your IPTV app (Apple TV, VLC, etc.):
   `http://<YOUR_HA_IP>:8080/playlist/lit.m3u`, `.../playlist/rus.m3u`, etc. Index also works: `.../playlist/0.m3u`, `.../playlist/1.m3u`.
 
 Example: `http://192.168.1.100:8080/playlist.m3u`
+
+### Xtream Codes API (local network, no auth)
+
+Apps that support Xtream (e.g. Tivimate, IPTVX) can use the same server as an Xtream source:
+
+- **URL:** `http://<YOUR_HA_IP>:8080`
+- **Username:** any (e.g. `local`) or leave empty
+- **Password:** any (e.g. `local`) or leave empty
+
+The add-on exposes `player_api.php` and stream URLs (`/live/...`, `get.php`). No real authentication; for local use only.
