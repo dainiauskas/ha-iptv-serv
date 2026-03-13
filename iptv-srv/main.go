@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -430,7 +431,16 @@ func xtreamPlayerAPIHandler(w http.ResponseWriter, r *http.Request) {
 	// Actions that need channel list (use cache; may be slow on first request if preload not done)
 	channels := getXtreamChannels()
 	if channels == nil {
-		http.Error(w, "No channels available", http.StatusServiceUnavailable)
+		// Return 200 with empty list so app does not show "error retrieving"; user can retry
+		w.Header().Set("Content-Type", "application/json")
+		switch action {
+		case "get_live_categories":
+			json.NewEncoder(w).Encode([]interface{}{})
+		case "get_live_streams":
+			json.NewEncoder(w).Encode([]interface{}{})
+		default:
+			json.NewEncoder(w).Encode(map[string]interface{}{})
+		}
 		return
 	}
 
@@ -559,25 +569,29 @@ func validateChannelsConcurrently(channels []Channel) []Channel {
 		Timeout: 3 * time.Second,
 	}
 
-	// Start workers
+	// Start workers: use GET and read only a little (many streams return 405 for HEAD)
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for ch := range chInput {
-				// HEAD request to check stream without downloading
-				req, err := http.NewRequest("HEAD", ch.URL, nil)
+				req, err := http.NewRequest("GET", ch.URL, nil)
 				if err != nil {
 					continue
 				}
-				
 				resp, err := client.Do(req)
-				if err == nil && resp.StatusCode == http.StatusOK {
-					chOutput <- ch // stream is reachable
+				if err != nil {
+					if resp != nil {
+						resp.Body.Close()
+					}
+					continue
 				}
-				if resp != nil {
-					resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					// Consume only first bytes so we don't download the full stream
+					io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+					chOutput <- ch
 				}
+				resp.Body.Close()
 			}
 		}()
 	}
