@@ -3,10 +3,12 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,12 +18,21 @@ import (
 
 const (
 	port    = ":8080"
-	workers = 20 // number of concurrent HTTP check workers
+	workers = 8 // concurrent HTTP checks; lower = less CPU on small devices
 )
 
 var (
 	sourceM3Us   []string            // for combined playlist
 	playlistMap  map[string]string   // slug or "0","1"... -> URL for single playlist lookup
+	epgURL       string              // optional EPG XMLTV URL from config
+)
+
+// EPG cache for xmltv.php
+var (
+	epgProgrammes []epgProgramme     // programmes with channel = our stream_id
+	epgCacheTime  time.Time
+	epgCacheMu    sync.RWMutex
+	epgCacheTTL   = 6 * time.Hour
 )
 
 // Xtream cache: combined validated channel list for player_api and stream redirects
@@ -29,7 +40,7 @@ var (
 	xtreamCache     []Channel
 	xtreamCacheTime time.Time
 	xtreamCacheMu   sync.RWMutex
-	xtreamCacheTTL  = 5 * time.Minute
+	xtreamCacheTTL  = 30 * time.Minute // rebuild less often to reduce CPU
 )
 
 type Channel struct {
@@ -45,6 +56,29 @@ type PlaylistEntry struct {
 
 type Options struct {
 	Playlists []PlaylistEntry `json:"playlists"`
+	EpgURL    string          `json:"epg_url"`
+}
+
+type epgProgramme struct {
+	Channel string
+	Start   string
+	Stop    string
+	Title   string
+	Desc    string
+}
+
+// xmltvProgramme for parsing XMLTV
+type xmltvProgramme struct {
+	Start   string `xml:"start,attr"`
+	Stop    string `xml:"stop,attr"`
+	Channel string `xml:"channel,attr"`
+	Title   string `xml:"title"`
+	Desc    string `xml:"desc"`
+}
+
+type xmltvRoot struct {
+	XMLName    xml.Name         `xml:"tv"`
+	Programmes []xmltvProgramme `xml:"programme"`
 }
 
 func main() {
@@ -98,6 +132,7 @@ func loadConfig() {
 			playlistMap[strconv.Itoa(i)] = p.URL
 		}
 	}
+	epgURL = strings.TrimSpace(opts.EpgURL)
 }
 
 func setDefaultPlaylists() {
@@ -173,26 +208,14 @@ func combinedPlaylistHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Println("Request: combined playlist – fetching and filtering sources...")
-
-	var channels []Channel
-	for _, sourceURL := range sourceM3Us {
-		ch, err := fetchChannelsFromURL(sourceURL)
-		if err != nil {
-			log.Printf("Failed to fetch source %s: %v", sourceURL, err)
-			continue
-		}
-		channels = append(channels, ch...)
-	}
-
-	if len(channels) == 0 {
+	// Reuse shared cache so we don't run full fetch+validate on every request (reduces CPU)
+	channels := getXtreamChannels()
+	if channels == nil {
 		http.Error(w, "Failed to reach any sources", http.StatusBadGateway)
 		return
 	}
-
-	validChannels := validateChannelsConcurrently(channels)
-	writeM3U(w, validChannels)
-	log.Printf("Combined playlist: %d working channels out of %d", len(validChannels), len(channels))
+	log.Printf("Combined playlist: serving %d channels from cache", len(channels))
+	writeM3U(w, channels)
 }
 
 // singlePlaylistHandler serves one playlist by name or index: /playlist/lit.m3u or /playlist/0.m3u
@@ -244,12 +267,87 @@ func singlePlaylistHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Single playlist %q: %d working channels out of %d", key, len(validChannels), len(channels))
 }
 
+var tvgIDRe = regexp.MustCompile(`tvg-id="([^"]*)"`)
+
+// parseTvgID extracts tvg-id from #EXTINF metadata for EPG channel matching
+func parseTvgID(meta string) string {
+	if m := tvgIDRe.FindStringSubmatch(meta); len(m) >= 2 {
+		return strings.TrimSpace(m[1])
+	}
+	return ""
+}
+
 // parseChannelNameFromMetadata extracts display name from #EXTINF:-1 tvg-id="..." , Name
 func parseChannelNameFromMetadata(meta string) string {
 	if idx := strings.LastIndex(meta, ","); idx >= 0 && idx+1 < len(meta) {
 		return strings.TrimSpace(meta[idx+1:])
 	}
 	return "Channel"
+}
+
+// getEpgProgrammes returns EPG programmes for our channels; uses cache, rebuilds if expired
+func getEpgProgrammes(channels []Channel) []epgProgramme {
+	if epgURL == "" {
+		return nil
+	}
+	epgCacheMu.RLock()
+	if time.Since(epgCacheTime) < epgCacheTTL && len(epgProgrammes) > 0 {
+		out := epgProgrammes
+		epgCacheMu.RUnlock()
+		return out
+	}
+	epgCacheMu.RUnlock()
+
+	epgCacheMu.Lock()
+	defer epgCacheMu.Unlock()
+	if time.Since(epgCacheTime) < epgCacheTTL && len(epgProgrammes) > 0 {
+		return epgProgrammes
+	}
+
+	// Build tvg-id -> our stream_id (1-based) map
+	tvgToStreamID := make(map[string]string)
+	for i, ch := range channels {
+		tid := parseTvgID(ch.Metadata)
+		if tid != "" {
+			tvgToStreamID[tid] = strconv.Itoa(i + 1)
+		}
+	}
+	if len(tvgToStreamID) == 0 {
+		return nil
+	}
+
+	resp, err := http.Get(epgURL)
+	if err != nil {
+		log.Printf("EPG fetch failed: %v", err)
+		return nil
+	}
+	defer resp.Body.Close()
+
+	var root xmltvRoot
+	dec := xml.NewDecoder(resp.Body)
+	if err := dec.Decode(&root); err != nil {
+		log.Printf("EPG parse failed: %v", err)
+		return nil
+	}
+
+	var out []epgProgramme
+	for _, p := range root.Programmes {
+		sid, ok := tvgToStreamID[p.Channel]
+		if !ok {
+			continue
+		}
+		out = append(out, epgProgramme{
+			Channel: sid,
+			Start:   p.Start,
+			Stop:    p.Stop,
+			Title:   p.Title,
+			Desc:    p.Desc,
+		})
+	}
+	epgProgrammes = out
+	epgCacheTime = time.Now()
+	log.Printf("EPG: loaded %d programmes for xmltv", len(out))
+	return epgProgrammes
 }
 
 // getXtreamChannels returns cached combined channel list; rebuilds if expired
@@ -372,7 +470,15 @@ func xtreamPlayerAPIHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// xtreamXMLTVHandler serves xmltv.php with minimal XMLTV EPG (channel list only, no programme data)
+func xmlEscape(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "\"", "&quot;")
+	return s
+}
+
+// xtreamXMLTVHandler serves xmltv.php with channel list and EPG programmes (if epg_url configured)
 func xtreamXMLTVHandler(w http.ResponseWriter, r *http.Request) {
 	channels := getXtreamChannels()
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
@@ -380,12 +486,20 @@ func xtreamXMLTVHandler(w http.ResponseWriter, r *http.Request) {
 	if channels != nil {
 		for i, ch := range channels {
 			name := parseChannelNameFromMetadata(ch.Metadata)
-			// Escape XML specials in display name
-			name = strings.ReplaceAll(name, "&", "&amp;")
-			name = strings.ReplaceAll(name, "<", "&lt;")
-			name = strings.ReplaceAll(name, ">", "&gt;")
 			id := strconv.Itoa(i + 1)
-			w.Write([]byte("  <channel id=\"" + id + "\">\n    <display-name>" + name + "</display-name>\n  </channel>\n"))
+			w.Write([]byte("  <channel id=\"" + id + "\">\n    <display-name>" + xmlEscape(name) + "</display-name>\n  </channel>\n"))
+		}
+		// EPG programmes (channel id = our stream_id)
+		programmes := getEpgProgrammes(channels)
+		for _, p := range programmes {
+			title := xmlEscape(p.Title)
+			desc := xmlEscape(p.Desc)
+			w.Write([]byte("  <programme start=\"" + p.Start + "\" stop=\"" + p.Stop + "\" channel=\"" + p.Channel + "\">\n"))
+			w.Write([]byte("    <title>" + title + "</title>\n"))
+			if desc != "" {
+				w.Write([]byte("    <desc>" + desc + "</desc>\n"))
+			}
+			w.Write([]byte("  </programme>\n"))
 		}
 	}
 	w.Write([]byte("</tv>\n"))

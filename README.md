@@ -13,7 +13,9 @@ This add-on fetches the configured `.m3u` playlists (e.g. from `iptv-org`), chec
 
 ## Configuration and startup
 
-1. After install go to **Configuration**. Under **Playlists** set **name** and **url** for each playlist. The name is used in the URL: `/playlist/[name].m3u`. Defaults: `lit`, `rus` (iptv-org).
+1. After install go to **Configuration**.
+   - **Playlists**: set **name** and **url** for each playlist. The name is used in the URL: `/playlist/[name].m3u`. Defaults: `lit`, `rus` (iptv-org).
+   - **EPG URL** (optional): full URL to an **XMLTV** file. Programmes are matched to channels by **tvg-id** (from the M3U `#EXTINF` line). Leave empty for no EPG. Example: `https://example.com/epg.xml`. Cached for 6 hours.
 2. **Save**. Recommended: **Start on boot**, **Watchdog**.
 3. Tap **START**.
 
@@ -38,4 +40,4 @@ Apps that support Xtream (e.g. Tivimate, IPTVX) can use the same server as an Xt
 - **Username:** any (e.g. `local`) or leave empty
 - **Password:** any (e.g. `local`) or leave empty
 
-The add-on exposes `player_api.php` and stream URLs (`/live/...`, `get.php`). No real authentication; for local use only.
+The add-on exposes `player_api.php`, `xmltv.php` (EPG), and stream URLs (`/live/...`, `get.php`). No real authentication; for local use only. If **EPG URL** is set in config, `xmltv.php` returns programme data so apps can show the TV guide.
